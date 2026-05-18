@@ -1,40 +1,73 @@
-const express = require('express');
-const dotenv = require('dotenv');
-const { MongoClient, ServerApiVersion } = require('mongodb');
-dotenv.config();
+const express = require("express");
+const dotenv = require("dotenv");
+const cors = require("cors");
+const { MongoClient, ServerApiVersion } = require("mongodb");
 
-const uri = process.env.MONGODB_URI;
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5001;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+app.use(cors());
+app.use(express.json());
+
+
+const uri = process.env.MONGODB_URI;
+
+// Create MongoDB Client
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  }
+  },
 });
 
-app.get('/', (req, res) => {
-    res.send('Server is running from StudyNook!');
+// Root Route
+app.get("/", (req, res) => {
+  res.send("Server is running from StudyNook!");
 });
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
+    // Connect MongoDB
     await client.connect();
-    // Send a ping to confirm a successful connection
+
+    console.log("✅ MongoDB Connected Successfully");
+
+    // Database & Collection
+    const db = client.db("studyNook");
+    const roomsCollection = db.collection("rooms");
+
+
+        // Add Room
+    app.post("/rooms", async (req, res) => {
+        const roomData = req.body;
+
+        console.log(roomData);
+
+        const result = await roomsCollection.insertOne(
+          roomData);
+
+        res.json(result);
+    });
+      
+        
+
+    // Ping MongoDB
     await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
-  } finally {
-    // Ensures that the client will close when you finish/error
-    await client.close();
+
+    console.log(
+      "✅ Pinged your deployment. Successfully connected to MongoDB!"
+    );
+  } catch (error) {
+    console.error("❌ MongoDB Connection Error:", error);
   }
 }
+
 run().catch(console.dir);
 
+// Start Server
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+  console.log(`🚀 Server is running on port ${PORT}`);
 });
