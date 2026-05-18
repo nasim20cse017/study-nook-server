@@ -51,6 +51,11 @@ async function run() {
 
         res.json(result);
     });
+
+    app.get("/rooms", async (req, res) => {
+      const result = await roomsCollection.find().toArray();
+      res.json(result);
+    });
       
         
 
