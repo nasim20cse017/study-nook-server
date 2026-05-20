@@ -16,102 +16,165 @@ const uri = process.env.MONGODB_URI;
 
 // Create MongoDB Client
 const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  },
+    serverApi: {
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
+    },
 });
 
 // Root Route
 app.get("/", (req, res) => {
-  res.send("Server is running from StudyNook!");
+    res.send("Server is running from StudyNook!");
 });
 
+function isOverlap(start1, end1, start2, end2) {
+    // Convert "HH:MM" to minutes since midnight for easy comparison
+    const toMinutes = (time) => {
+        const [h, m] = time.split(":").map(Number);
+        return h * 60 + m;
+    };
+    const s1 = toMinutes(start1);
+    const e1 = toMinutes(end1);
+    const s2 = toMinutes(start2);
+    const e2 = toMinutes(end2);
+    return s1 < e2 && s2 < e1;
+}
+
 async function run() {
-  try {
-    // Connect MongoDB
-    await client.connect();
+    try {
+        // Connect MongoDB
+        await client.connect();
 
-    console.log("✅ MongoDB Connected Successfully");
+        console.log("✅ MongoDB Connected Successfully");
 
-    // Database & Collection
-    const db = client.db("studyNook");
-    const roomsCollection = db.collection("rooms");
-    const bookingCollection = db.collection("bookings");
+        // Database & Collection
+        const db = client.db("studyNook");
+        const roomsCollection = db.collection("rooms");
+        const bookingCollection = db.collection("bookings");
 
 
         // Add Room
-    app.post("/rooms", async (req, res) => {
-        const roomData = req.body;
+        app.post("/rooms", async (req, res) => {
+            const roomData = req.body;
 
-        console.log(roomData);
+            console.log(roomData);
 
-        const result = await roomsCollection.insertOne(
-          roomData);
+            const result = await roomsCollection.insertOne(
+                roomData);
 
-        res.json(result);
-    });
+            res.json(result);
+        });
 
-    app.get("/rooms", async (req, res) => {
-      const result = await roomsCollection.find().toArray();
-      res.json(result);
-    });
+        app.get("/rooms", async (req, res) => {
+            const result = await roomsCollection.find().toArray();
+            res.json(result);
+        });
 
-     app.get("/rooms/:id", async (req, res) => {
-      const { id } = req.params;
+        app.get("/rooms/:id", async (req, res) => {
+            const { id } = req.params;
 
-      const result = await roomsCollection.findOne({
-        _id: new ObjectId(id),
-      });
+            const result = await roomsCollection.findOne({
+                _id: new ObjectId(id),
+            });
 
-      res.json(result);
-    });
+            res.json(result);
+        });
 
-    app.patch("/rooms/:id", async (req, res) => {
-      const { id } = req.params;
-      const updatedData = req.body;
-      console.log(updatedData);
+        app.patch("/rooms/:id", async (req, res) => {
+            const { id } = req.params;
+            const updatedData = req.body;
+            console.log(updatedData);
 
-      const result = await roomsCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: updatedData },
-      );
+            const result = await roomsCollection.updateOne(
+                { _id: new ObjectId(id) },
+                { $set: updatedData },
+            );
 
-      res.json(result);
-    });
+            res.json(result);
+        });
 
-    app.delete("/rooms/:id", async (req, res) => {
-      const { id } = req.params;
-      const result = await roomsCollection.deleteOne({
-        _id: new ObjectId(id),
-      });
-      res.json(result);
-    });
+        app.delete("/rooms/:id", async (req, res) => {
+            const { id } = req.params;
+            const result = await roomsCollection.deleteOne({
+                _id: new ObjectId(id),
+            });
+            res.json(result);
+        });
+
+        // Book a room with conflict check (NO bookingCount increment)
+        app.post("/bookings", async (req, res) => {
+            const bookingData = req.body;
+            const { roomId, date, startTime, endTime } = bookingData;
+
+            // Validate required fields
+            if (!roomId || !date || !startTime || !endTime) {
+                return res.status(400).json({ message: "Missing required booking fields" });
+            }
+
+            try {
+                // 1. Check for conflicting bookings on the same room & date
+                const existingBookings = await bookingCollection.find({
+                    roomId: roomId,
+                    date: date,
+                }).toArray();
+
+                // Check if any existing booking overlaps with the new time slot
+                const hasConflict = existingBookings.some((booking) =>
+                    isOverlap(startTime, endTime, booking.startTime, booking.endTime)
+                );
+
+                if (hasConflict) {
+                    return res.status(409).json({
+                        message: "Time slot already booked. Please choose another time.",
+                    });
+                }
+
+                // 2. No conflict – create the booking
+                const result = await bookingCollection.insertOne(bookingData);
+
+                // 3. Return success (no room count update)
+                res.status(200).json({
+                    message: "Booking created successfully",
+                    bookingId: result.insertedId,
+                });
+            } catch (error) {
+                console.error("Booking error:", error);
+                res.status(500).json({ message: "Internal server error" });
+            }
+        });
 
 
-   app.post("/bookings", async (req, res) => {
-      const bookingData = req.body;
-      const result = await bookingCollection.insertOne(bookingData);
 
-      res.json(result);
-    });
-        
+        app.get("/bookings", async (req, res) => {
+            const result = await bookingCollection.find().toArray();
+            res.json(result);
+        });
 
-    // Ping MongoDB
-    await client.db("admin").command({ ping: 1 });
+    app.get("/bookings/:roomId", async (req, res) => {
+  const roomId = req.params.roomId;
 
-    console.log(
-      "✅ Pinged your deployment. Successfully connected to MongoDB!"
-    );
-  } catch (error) {
-    console.error("❌ MongoDB Connection Error:", error);
-  }
+  const total = await bookingCollection.countDocuments({
+    roomId,
+  });
+
+  res.send({ total });
+});
+
+        // Ping MongoDB
+        await client.db("admin").command({ ping: 1 });
+
+        console.log(
+            "✅ Pinged your deployment. Successfully connected to MongoDB!"
+        );
+    } catch (error) {
+        console.error("❌ MongoDB Connection Error:", error);
+    }
 }
 
 run().catch(console.dir);
 
 // Start Server
 app.listen(PORT, () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
+    console.log(`🚀 Server is running on port ${PORT}`);
 });
