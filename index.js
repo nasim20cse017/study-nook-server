@@ -175,6 +175,53 @@ app.get("/bookings", async (req, res) => {
   res.send({ total });
 });
 
+app.patch("/bookings/:id/cancel", async (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.body; // send userId in request body for verification
+
+  if (!userId) {
+    return res.status(400).json({ message: "userId is required" });
+  }
+
+  try {
+    const booking = await bookingCollection.findOne({ _id: new ObjectId(id) });
+
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
+
+    if (booking.userId !== userId) {
+      return res.status(403).json({ message: "You are not authorized to cancel this booking" });
+    }
+
+    if (booking.status !== "confirmed") {
+      return res.status(400).json({ message: "Booking cannot be cancelled (already cancelled or completed)" });
+    }
+
+    // Check if booking date is in the future
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const bookingDate = new Date(booking.date);
+    if (bookingDate < today) {
+      return res.status(400).json({ message: "Cannot cancel a past booking" });
+    }
+
+    const result = await bookingCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: "cancelled" } }
+    );
+
+    if (result.modifiedCount === 1) {
+      res.json({ message: "Booking cancelled successfully" });
+    } else {
+      res.status(500).json({ message: "Failed to cancel booking" });
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
         // Ping MongoDB
         await client.db("admin").command({ ping: 1 });
 
