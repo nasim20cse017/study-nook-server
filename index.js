@@ -103,46 +103,44 @@ async function run() {
         });
 
         // Book a room with conflict check (NO bookingCount increment)
-        app.post("/bookings", async (req, res) => {
-            const bookingData = req.body;
-            const { roomId, date, startTime, endTime } = bookingData;
+       app.post("/bookings", async (req, res) => {
+  const bookingData = req.body;
+  const { roomId, date, startTime, endTime } = bookingData;
 
-            // Validate required fields
-            if (!roomId || !date || !startTime || !endTime) {
-                return res.status(400).json({ message: "Missing required booking fields" });
-            }
+  if (!roomId || !date || !startTime || !endTime) {
+    return res.status(400).json({ message: "Missing required booking fields" });
+  }
 
-            try {
-                // 1. Check for conflicting bookings on the same room & date
-                const existingBookings = await bookingCollection.find({
-                    roomId: roomId,
-                    date: date,
-                }).toArray();
+  try {
+    // Conflict check (as before)
+    const existingBookings = await bookingCollection.find({
+      roomId: roomId,
+      date: date,
+    }).toArray();
 
-                // Check if any existing booking overlaps with the new time slot
-                const hasConflict = existingBookings.some((booking) =>
-                    isOverlap(startTime, endTime, booking.startTime, booking.endTime)
-                );
+    const hasConflict = existingBookings.some((booking) =>
+      isOverlap(startTime, endTime, booking.startTime, booking.endTime)
+    );
 
-                if (hasConflict) {
-                    return res.status(409).json({
-                        message: "Time slot already booked. Please choose another time.",
-                    });
-                }
+    if (hasConflict) {
+      return res.status(409).json({ message: "Time slot already booked. Please choose another time." });
+    }
 
-                // 2. No conflict – create the booking
-                const result = await bookingCollection.insertOne(bookingData);
+    // Add status field
+    const newBooking = {
+      ...bookingData,
+      status: "confirmed",
+      createdAt: new Date(),
+    };
 
-                // 3. Return success (no room count update)
-                res.status(200).json({
-                    message: "Booking created successfully",
-                    bookingId: result.insertedId,
-                });
-            } catch (error) {
-                console.error("Booking error:", error);
-                res.status(500).json({ message: "Internal server error" });
-            }
-        });
+    const result = await bookingCollection.insertOne(newBooking);
+    res.status(200).json({ message: "Booking created successfully", bookingId: result.insertedId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 
 
 
@@ -150,6 +148,22 @@ async function run() {
             const result = await bookingCollection.find().toArray();
             res.json(result);
         });
+
+app.get("/bookings", async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ message: "userId query parameter is required" });
+  }
+
+  try {
+    const bookings = await bookingCollection.find({ userId }).toArray();
+    res.json(bookings);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Failed to fetch bookings" });
+  }
+});
 
     app.get("/bookings/:roomId", async (req, res) => {
   const roomId = req.params.roomId;
