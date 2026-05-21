@@ -53,6 +53,26 @@ async function run() {
         const roomsCollection = db.collection("rooms");
         const bookingCollection = db.collection("bookings");
 
+        app.get("/featured", async (req, res) => {
+            try {
+                const result = await roomsCollection
+                    .find({})
+                    .sort({ createdAt: -1 }) // Latest rooms first
+                    .limit(6) // Only 6 rooms
+                    .toArray();
+
+                res.status(200).json(result);
+
+            } catch (error) {
+                console.error(error);
+
+                res.status(500).json({
+                    success: false,
+                    message: "Failed to fetch featured rooms",
+                });
+            }
+        });
+
 
         // Add Room
         app.post("/rooms", async (req, res) => {
@@ -103,43 +123,43 @@ async function run() {
         });
 
         // Book a room with conflict check (NO bookingCount increment)
-       app.post("/bookings", async (req, res) => {
-  const bookingData = req.body;
-  const { roomId, date, startTime, endTime } = bookingData;
+        app.post("/bookings", async (req, res) => {
+            const bookingData = req.body;
+            const { roomId, date, startTime, endTime } = bookingData;
 
-  if (!roomId || !date || !startTime || !endTime) {
-    return res.status(400).json({ message: "Missing required booking fields" });
-  }
+            if (!roomId || !date || !startTime || !endTime) {
+                return res.status(400).json({ message: "Missing required booking fields" });
+            }
 
-  try {
-    // Conflict check (as before)
-    const existingBookings = await bookingCollection.find({
-      roomId: roomId,
-      date: date,
-    }).toArray();
+            try {
+                // Conflict check (as before)
+                const existingBookings = await bookingCollection.find({
+                    roomId: roomId,
+                    date: date,
+                }).toArray();
 
-    const hasConflict = existingBookings.some((booking) =>
-      isOverlap(startTime, endTime, booking.startTime, booking.endTime)
-    );
+                const hasConflict = existingBookings.some((booking) =>
+                    isOverlap(startTime, endTime, booking.startTime, booking.endTime)
+                );
 
-    if (hasConflict) {
-      return res.status(409).json({ message: "Time slot already booked. Please choose another time." });
-    }
+                if (hasConflict) {
+                    return res.status(409).json({ message: "Time slot already booked. Please choose another time." });
+                }
 
-    // Add status field
-    const newBooking = {
-      ...bookingData,
-      status: "confirmed",
-      createdAt: new Date(),
-    };
+                // Add status field
+                const newBooking = {
+                    ...bookingData,
+                    status: "confirmed",
+                    createdAt: new Date(),
+                };
 
-    const result = await bookingCollection.insertOne(newBooking);
-    res.status(200).json({ message: "Booking created successfully", bookingId: result.insertedId });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
+                const result = await bookingCollection.insertOne(newBooking);
+                res.status(200).json({ message: "Booking created successfully", bookingId: result.insertedId });
+            } catch (error) {
+                console.error(error);
+                res.status(500).json({ message: "Internal server error" });
+            }
+        });
 
 
 
@@ -149,78 +169,78 @@ async function run() {
             res.json(result);
         });
 
-app.get("/bookings", async (req, res) => {
-  const { userId } = req.query;
+        app.get("/bookings", async (req, res) => {
+            const { userId } = req.query;
 
-  if (!userId) {
-    return res.status(400).json({ message: "userId query parameter is required" });
-  }
+            if (!userId) {
+                return res.status(400).json({ message: "userId query parameter is required" });
+            }
 
-  try {
-    const bookings = await bookingCollection.find({ userId }).toArray();
-    res.json(bookings);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Failed to fetch bookings" });
-  }
-});
+            try {
+                const bookings = await bookingCollection.find({ userId }).toArray();
+                res.json(bookings);
+            } catch (error) {
+                console.error(error);
+                res.status(500).json({ message: "Failed to fetch bookings" });
+            }
+        });
 
-    app.get("/bookings/:roomId", async (req, res) => {
-  const roomId = req.params.roomId;
+        app.get("/bookings/:roomId", async (req, res) => {
+            const roomId = req.params.roomId;
 
-  const total = await bookingCollection.countDocuments({
-    roomId,
-  });
+            const total = await bookingCollection.countDocuments({
+                roomId,
+            });
 
-  res.send({ total });
-});
+            res.send({ total });
+        });
 
-app.patch("/bookings/:id/cancel", async (req, res) => {
-  const { id } = req.params;
-  const { userId } = req.body; // send userId in request body for verification
+        app.patch("/bookings/:id/cancel", async (req, res) => {
+            const { id } = req.params;
+            const { userId } = req.body; // send userId in request body for verification
 
-  if (!userId) {
-    return res.status(400).json({ message: "userId is required" });
-  }
+            if (!userId) {
+                return res.status(400).json({ message: "userId is required" });
+            }
 
-  try {
-    const booking = await bookingCollection.findOne({ _id: new ObjectId(id) });
+            try {
+                const booking = await bookingCollection.findOne({ _id: new ObjectId(id) });
 
-    if (!booking) {
-      return res.status(404).json({ message: "Booking not found" });
-    }
+                if (!booking) {
+                    return res.status(404).json({ message: "Booking not found" });
+                }
 
-    if (booking.userId !== userId) {
-      return res.status(403).json({ message: "You are not authorized to cancel this booking" });
-    }
+                if (booking.userId !== userId) {
+                    return res.status(403).json({ message: "You are not authorized to cancel this booking" });
+                }
 
-    if (booking.status !== "confirmed") {
-      return res.status(400).json({ message: "Booking cannot be cancelled (already cancelled or completed)" });
-    }
+                if (booking.status !== "confirmed") {
+                    return res.status(400).json({ message: "Booking cannot be cancelled (already cancelled or completed)" });
+                }
 
-    // Check if booking date is in the future
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const bookingDate = new Date(booking.date);
-    if (bookingDate < today) {
-      return res.status(400).json({ message: "Cannot cancel a past booking" });
-    }
+                // Check if booking date is in the future
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const bookingDate = new Date(booking.date);
+                if (bookingDate < today) {
+                    return res.status(400).json({ message: "Cannot cancel a past booking" });
+                }
 
-    const result = await bookingCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { status: "cancelled" } }
-    );
+                const result = await bookingCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { status: "cancelled" } }
+                );
 
-    if (result.modifiedCount === 1) {
-      res.json({ message: "Booking cancelled successfully" });
-    } else {
-      res.status(500).json({ message: "Failed to cancel booking" });
-    }
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Internal server error" });
-  }
-});
+                if (result.modifiedCount === 1) {
+                    res.json({ message: "Booking cancelled successfully" });
+                } else {
+                    res.status(500).json({ message: "Failed to cancel booking" });
+                }
+            } catch (error) {
+                console.error(error);
+                res.status(500).json({ message: "Internal server error" });
+            }
+        });
 
         // Ping MongoDB
         await client.db("admin").command({ ping: 1 });
