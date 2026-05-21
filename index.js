@@ -2,6 +2,7 @@ const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 
 dotenv.config();
 
@@ -40,6 +41,28 @@ function isOverlap(start1, end1, start2, end2) {
     const e2 = toMinutes(end2);
     return s1 < e2 && s2 < e1;
 }
+
+const JWKS = createRemoteJWKSet(new URL(`${process.env.CLIENT_URL}/api/auth/jwks`));
+
+const verifyToken = async (req, res, next) => {
+  const authHeader = req?.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    console.log(payload);
+    next();
+  } catch (error) {
+    return res.status(403).json({ message: "Forbidden" });
+  }
+};
 
 async function run() {
     try {
@@ -86,12 +109,43 @@ async function run() {
             res.json(result);
         });
 
-        app.get("/rooms", async (req, res) => {
-            const result = await roomsCollection.find().toArray();
-            res.json(result);
-        });
+// server.js – add this inside your existing route
+app.get("/rooms", async (req, res) => {
+  try {
+    const { search, amenities, minPrice, maxPrice, floor } = req.query;
+    let filter = {};
 
-        app.get("/rooms/:id", async (req, res) => {
+    // 1. Search by room name (case‑insensitive)
+    if (search) {
+      filter.roomName = { $regex: search, $options: "i" };
+    }
+
+    // 2. Amenities filter (array of selected amenities)
+    if (amenities) {
+      const amenitiesArray = amenities.split(","); // e.g. "Wi-Fi,Projector"
+      filter.amenities = { $in: amenitiesArray };
+    }
+
+    // 3. Hourly rate range
+    if (minPrice || maxPrice) {
+      filter.hourlyRate = {};
+      if (minPrice) filter.hourlyRate.$gte = Number(minPrice);
+      if (maxPrice) filter.hourlyRate.$lte = Number(maxPrice);
+    }
+
+    // 4. Floor filter (exact match)
+    if (floor) {
+      filter.floor = floor;
+    }
+
+    const result = await roomsCollection.find(filter).toArray();
+    res.json(result);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Failed to fetch rooms" });
+  }
+});
+        app.get("/rooms/:id", verifyToken, async (req, res) => {
             const { id } = req.params;
 
             const result = await roomsCollection.findOne({
@@ -101,7 +155,7 @@ async function run() {
             res.json(result);
         });
 
-        app.patch("/rooms/:id", async (req, res) => {
+        app.patch("/rooms/:id", verifyToken, async (req, res) => {
             const { id } = req.params;
             const updatedData = req.body;
             console.log(updatedData);
@@ -114,7 +168,7 @@ async function run() {
             res.json(result);
         });
 
-        app.delete("/rooms/:id", async (req, res) => {
+        app.delete("/rooms/:id", verifyToken, async (req, res) => {
             const { id } = req.params;
             const result = await roomsCollection.deleteOne({
                 _id: new ObjectId(id),
@@ -123,44 +177,56 @@ async function run() {
         });
 
         // Book a room with conflict check (NO bookingCount increment)
-        app.post("/bookings", async (req, res) => {
-            const bookingData = req.body;
-            const { roomId, date, startTime, endTime } = bookingData;
+// Book a room with conflict check using MongoDB $gte/$lte
+app.post("/bookings", verifyToken, async (req, res) => {
+    const bookingData = req.body;
+    const { roomId, date, startTime, endTime } = bookingData;
 
-            if (!roomId || !date || !startTime || !endTime) {
-                return res.status(400).json({ message: "Missing required booking fields" });
-            }
+    // 1. Validate required fields
+    if (!roomId || !date || !startTime || !endTime) {
+        return res.status(400).json({ message: "Missing required booking fields" });
+    }
 
-            try {
-                // Conflict check (as before)
-                const existingBookings = await bookingCollection.find({
-                    roomId: roomId,
-                    date: date,
-                }).toArray();
+    // Optional: validate time format (HH:MM) and that startTime < endTime
+    if (startTime >= endTime) {
+        return res.status(400).json({ message: "startTime must be earlier than endTime" });
+    }
 
-                const hasConflict = existingBookings.some((booking) =>
-                    isOverlap(startTime, endTime, booking.startTime, booking.endTime)
-                );
-
-                if (hasConflict) {
-                    return res.status(409).json({ message: "Time slot already booked. Please choose another time." });
-                }
-
-                // Add status field
-                const newBooking = {
-                    ...bookingData,
-                    status: "confirmed",
-                    createdAt: new Date(),
-                };
-
-                const result = await bookingCollection.insertOne(newBooking);
-                res.status(200).json({ message: "Booking created successfully", bookingId: result.insertedId });
-            } catch (error) {
-                console.error(error);
-                res.status(500).json({ message: "Internal server error" });
-            }
+    try {
+        // 2. Conflict check – find any overlapping booking using MongoDB operators
+        // Overlap condition: existing.startTime < new.endTime AND existing.endTime > new.startTime
+        const conflictingBooking = await bookingCollection.findOne({
+            roomId: roomId,
+            date: date,
+            startTime: { $lt: endTime },    // existing starts before new ends
+            endTime: { $gt: startTime }      // existing ends after new starts
         });
 
+        if (conflictingBooking) {
+            return res.status(409).json({
+                message: "Time slot already booked. Please choose another time."
+            });
+        }
+
+        // 3. Create the new booking document
+        const newBooking = {
+            ...bookingData,
+            status: "confirmed",
+            createdAt: new Date()
+        };
+
+        // 4. Insert into database
+        const result = await bookingCollection.insertOne(newBooking);
+
+        res.status(201).json({
+            message: "Booking created successfully",
+            bookingId: result.insertedId
+        });
+    } catch (error) {
+        console.error("Error creating booking:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
 
 
 
@@ -169,7 +235,7 @@ async function run() {
             res.json(result);
         });
 
-        app.get("/bookings", async (req, res) => {
+        app.get("/bookings", verifyToken, async (req, res) => {
             const { userId } = req.query;
 
             if (!userId) {
@@ -195,7 +261,7 @@ async function run() {
             res.send({ total });
         });
 
-        app.patch("/bookings/:id/cancel", async (req, res) => {
+        app.patch("/bookings/:id/cancel", verifyToken, async (req, res) => {
             const { id } = req.params;
             const { userId } = req.body; // send userId in request body for verification
 
